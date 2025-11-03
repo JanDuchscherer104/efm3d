@@ -1,0 +1,11 @@
+[build-system]
+requires      = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name            = "efm3d"
+version         = "0.0.0"
+requires-python = ">=3.9"
+
+[tool.hatch.build.targets.wheel]
+packages = ["efm3d"]
