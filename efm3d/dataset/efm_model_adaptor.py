@@ -14,11 +14,10 @@
 
 import csv
 import logging
+from collections.abc import Callable
 from functools import partial
-from typing import Callable, Dict, List, Optional
 
 import torch
-
 import webdataset as wds
 from atek.data_loaders.atek_wds_dataloader import (
     load_atek_wds_dataset,
@@ -41,7 +40,6 @@ from efm3d.aria.aria_constants import (
 )
 from efm3d.aria.obb import transform_obbs
 from efm3d.aria.tensor_wrapper import smart_stack
-
 from webdataset.filters import pipelinefilter
 
 logger = logging.getLogger(__name__)
@@ -49,7 +47,7 @@ logger = logging.getLogger(__name__)
 
 def get_local_pose_helper(snippet_origin_time_s, batch, local_coordinate):
     """
-    get the local coordinate system of the snippet as the pose at the
+    Get the local coordinate system of the snippet as the pose at the
     snippet_origin_time_s under the specified coordinate system conventions (rig, or cam_rgb)
     """
     assert (
@@ -79,7 +77,7 @@ def get_local_pose_helper(snippet_origin_time_s, batch, local_coordinate):
         )
     else:
         raise NotImplementedError(
-            f"{local_coordinate} is not a valid coordinate option"
+            f"{local_coordinate} is not a valid coordinate option",
         )
 
     return T_world_local
@@ -141,7 +139,8 @@ def run_local_cosy(
         # transform obbs into the new snippet coordinate system as well
         if ARIA_OBB_PADDED in batch.keys():
             new_batch[ARIA_OBB_PADDED] = transform_obbs(
-                batch[ARIA_OBB_PADDED], T_snippet_new_old
+                batch[ARIA_OBB_PADDED],
+                T_snippet_new_old,
             )
 
     return new_batch
@@ -153,14 +152,14 @@ def get_snippet_cosy_from_rig(
     time: torch.Tensor,
 ):
     """
-    simply interpolate the T_world_rig using the given time at the snippet_origin_time
+    Simply interpolate the T_world_rig using the given time at the snippet_origin_time
     to get T_world_rig_origin
     """
     T_world_rig_origin, good = Ts_world_rig.interpolate(time, snippet_origin_time)
     T = T_world_rig_origin.shape[-1]
     if T > 1 and not good.all():
-        logger.warn(
-            f"WARNING some interpolated poses were not good: {good} time_s {time} snippet_time {snippet_origin_time}"
+        logger.warning(
+            f"WARNING some interpolated poses were not good: {good} time_s {time} snippet_time {snippet_origin_time}",
         )
     return T_world_rig_origin
 
@@ -173,29 +172,32 @@ def get_snippet_cosy_from_cam_rgb(
     cam_rgb_time_s: torch.Tensor,
 ):
     """
-    interpolate T_world_rig and T_camera_rig using the given time_s at the snippet_origin_time
+    Interpolate T_world_rig and T_camera_rig using the given time_s at the snippet_origin_time
     and then compose the interpolated centers to get T_world_camera_origin
     """
     # interpolate T_camera_rig
     Ts_camera_rig = cam_rgb.T_camera_rig
     T_camera_rig_origin, good = Ts_camera_rig.interpolate(
-        cam_rgb_time_s, snippet_origin_time
+        cam_rgb_time_s,
+        snippet_origin_time,
     )
 
     T = Ts_camera_rig.shape[-1]
     if T > 1 and not good.all():
-        logger.warn("WARNING: some interpolated camera extrinsics were not good:")
+        logger.warning("WARNING: some interpolated camera extrinsics were not good:")
     logger.debug(
-        f"Good: {good}\n time_s {cam_rgb_time_s}\n snip_center {snippet_origin_time}"
+        f"Good: {good}\n time_s {cam_rgb_time_s}\n snip_center {snippet_origin_time}",
     )
     T_world_rig_origin = get_snippet_cosy_from_rig(
-        Ts_world_rig=Ts_world_rig, time=time, snippet_origin_time=snippet_origin_time
+        Ts_world_rig=Ts_world_rig,
+        time=time,
+        snippet_origin_time=snippet_origin_time,
     )
     return T_world_rig_origin @ T_camera_rig_origin.inverse()
 
 
 class EfmModelAdaptor:
-    ATEK_CAM_LABEL_TO_EFM_CAM_LABEL: Dict[str, str] = {
+    ATEK_CAM_LABEL_TO_EFM_CAM_LABEL: dict[str, str] = {
         "camera-rgb": "rgb",
         "camera-slam-left": "slaml",
         "camera-slam-right": "slamr",
@@ -209,7 +211,7 @@ class EfmModelAdaptor:
         freq: int,
         snippet_length_s: float = 2.0,
         semidense_points_pad_to_num: int = 50000,
-        atek_to_efm_taxonomy_mapping_file: Optional[str] = None,
+        atek_to_efm_taxonomy_mapping_file: str | None = None,
     ):
         self.freq = torch.tensor([freq], dtype=torch.int32)
 
@@ -221,7 +223,7 @@ class EfmModelAdaptor:
         # Load optional taxonomy mapping file
         if atek_to_efm_taxonomy_mapping_file is not None:
             self.atek_to_efm_category_mapping = self._load_taxonomy_mapping_file(
-                atek_to_efm_taxonomy_mapping_file
+                atek_to_efm_taxonomy_mapping_file,
             )
         else:
             self.atek_to_efm_category_mapping = None
@@ -265,38 +267,39 @@ class EfmModelAdaptor:
         ) in EfmModelAdaptor.ATEK_CAM_LABEL_TO_EFM_CAM_LABEL.items():
             dict_key_mapping.update(
                 EfmModelAdaptor.get_dict_key_mapping_for_camera(
-                    atek_camera_label=atek_cam_label, efm_camera_label=efm_cam_label
-                )
+                    atek_camera_label=atek_cam_label,
+                    efm_camera_label=efm_cam_label,
+                ),
             )
 
         return dict_key_mapping
 
-    def _get_pose_to_align_gravity(self, sample_dict: Dict) -> Optional[PoseTW]:
+    def _get_pose_to_align_gravity(self, sample_dict: dict) -> PoseTW | None:
         """
         A helper function to return a T_newWorld_oldWorld transformation to align world gravity to the EFM convention.
         This pose needs to be later applied to all poses that include world.
         """
         efm_gravity_in_world = torch.tensor(
-            self.EFM_GRAVITY_IN_WORLD, dtype=torch.float32
+            self.EFM_GRAVITY_IN_WORLD,
+            dtype=torch.float32,
         )
         current_gravity_in_world = sample_dict["pose/gravity_in_world"]
         if torch.allclose(efm_gravity_in_world, current_gravity_in_world, atol=1e-3):
             # print("gravity convention is already aligned.")
             return None
-        else:
-            if torch.allclose(current_gravity_in_world, torch.tensor([0, -9.81, 0])):
-                return PoseTW.from_Rt(
-                    torch.tensor(
-                        [[1, 0, 0], [0, 0, -1], [0, 1, 0]], dtype=torch.float32
-                    ),
-                    torch.tensor([0, 0, 0], dtype=torch.float32),
-                )
-            else:
-                raise ValueError(
-                    f"unsupported gravity direction to align: {current_gravity_in_world}"
-                )
+        if torch.allclose(current_gravity_in_world, torch.tensor([0, -9.81, 0])):
+            return PoseTW.from_Rt(
+                torch.tensor(
+                    [[1, 0, 0], [0, 0, -1], [0, 1, 0]],
+                    dtype=torch.float32,
+                ),
+                torch.tensor([0, 0, 0], dtype=torch.float32),
+            )
+        raise ValueError(
+            f"unsupported gravity direction to align: {current_gravity_in_world}",
+        )
 
-    def _load_taxonomy_mapping_file(self, filename: str) -> Dict:
+    def _load_taxonomy_mapping_file(self, filename: str) -> dict:
         """
         Load a taxonomy mapping csv file in the format of:
         ATEK_category_name, efm_category_name, efm_category_id
@@ -304,7 +307,7 @@ class EfmModelAdaptor:
         returns a dict of {atek_cat_name -> (efm_cat_name, efm_cat_id)}
         """
         atek_to_efm_category_mapping = {}
-        with open(filename, "r") as f:
+        with open(filename) as f:
             csv_reader = csv.reader(f)
             next(csv_reader)
 
@@ -315,7 +318,7 @@ class EfmModelAdaptor:
 
         return atek_to_efm_category_mapping
 
-    def _fill_dict_with_freq(self, sample_dict: Dict) -> Dict:
+    def _fill_dict_with_freq(self, sample_dict: dict) -> dict:
         fields_to_fill = [
             "pose/hz",
             "points/hz",
@@ -333,7 +336,9 @@ class EfmModelAdaptor:
         return sample_dict
 
     def _convert_to_batched_camera_tw(
-        self, sample_dict: Dict, cam_label: str
+        self,
+        sample_dict: dict,
+        cam_label: str,
     ) -> CameraTW:
         """
         A helper function to convert ATEK camera calibration to EFM camera tensor wrapper, where calibration params are replicated x `num_frames`.
@@ -342,14 +347,16 @@ class EfmModelAdaptor:
         batched_size = torch.Size((self.fixed_num_frames, 1))
         camera_tw = CameraTW.from_surreal(
             width=torch.full(
-                size=batched_size, fill_value=sample_dict[f"{cam_label}/img"].shape[3]
+                size=batched_size,
+                fill_value=sample_dict[f"{cam_label}/img"].shape[3],
             ),
             height=torch.full(
-                size=batched_size, fill_value=sample_dict[f"{cam_label}/img"].shape[2]
+                size=batched_size,
+                fill_value=sample_dict[f"{cam_label}/img"].shape[2],
             ),
             type_str=sample_dict[f"{cam_label}/calib/camera_model_name"],
             params=sample_dict[f"{cam_label}/calib/projection_params"].unsqueeze(
-                0
+                0,
             ),  # make tensor shape [1, 15], so that it can be expanded to [num_frames, 15]
             gain=fill_or_trim_tensor(
                 tensor=sample_dict[f"{cam_label}/calib/gain"],
@@ -363,13 +370,13 @@ class EfmModelAdaptor:
             ),
             valid_radius=sample_dict[f"{cam_label}/calib/valid_radius"],
             T_camera_rig=PoseTW.from_matrix3x4(
-                sample_dict[f"{cam_label}/calib/t_device_camera"]
+                sample_dict[f"{cam_label}/calib/t_device_camera"],
             ).inverse(),
         )
 
         return camera_tw.float()
 
-    def _update_efm_obb_gt(self, atek_gt_dict: Dict) -> Dict:
+    def _update_efm_obb_gt(self, atek_gt_dict: dict) -> dict:
         """
         Helper function to convert ATEK obb gt to EFM obb gt.
         """
@@ -424,7 +431,7 @@ class EfmModelAdaptor:
                     dtype=torch.float32,
                 )
                 T_world_object = PoseTW.from_matrix3x4(
-                    atek_single_bb3_dict["ts_world_object"][cam_index_0]
+                    atek_single_bb3_dict["ts_world_object"][cam_index_0],
                 )
                 inst_id = atek_single_bb3_dict["instance_ids"][cam_index_0]
 
@@ -451,12 +458,12 @@ class EfmModelAdaptor:
                     cam_label = "camera-rgb"
                     cam_index = instance_mapping_info[cam_label]
                     bb2_rgb = atek_gt_dict["obb2"][cam_label]["bbox_ranges"][cam_index]
-                
+
                 if "camera-slam-left" in instance_mapping_info:
                     cam_label = "camera-slam-left"
                     cam_index = instance_mapping_info[cam_label]
                     bb2_slaml = atek_gt_dict["obb2"][cam_label]["bbox_ranges"][cam_index]
-                
+
                 if "camera-slam-right" in instance_mapping_info:
                     cam_label = "camera-slam-right"
                     cam_index = instance_mapping_info[cam_label]
@@ -473,7 +480,7 @@ class EfmModelAdaptor:
                         T_world_object=T_world_object,
                         sem_id=torch.tensor([sem_id], dtype=torch.int64),
                         inst_id=torch.tensor([inst_id], dtype=torch.int64),
-                    )
+                    ),
                 )
             # end for instance_id
 
@@ -485,13 +492,13 @@ class EfmModelAdaptor:
             efm_obb_all_timestamps.append(efm_obb_tw)
 
         efm_sub_dict["obbs/padded_snippet"] = ObbTW(
-            smart_stack(efm_obb_all_timestamps, dim=0)
+            smart_stack(efm_obb_all_timestamps, dim=0),
         )
         efm_sub_dict["obbs/time_ns"] = torch.tensor(timestamp_list, dtype=torch.int64)
         efm_sub_dict["obbs/sem_id_to_name"] = semantic_id_to_name
         return efm_sub_dict
 
-    def _pad_semidense_data(self, sample_dict: Dict) -> Dict:
+    def _pad_semidense_data(self, sample_dict: dict) -> dict:
         """
         A helper function to pad semidense data from List[Tensor, (K, 3 or 1)] to fixed shape of [numFrames, num_semidense_points, 3 or 1]
         """
@@ -514,12 +521,14 @@ class EfmModelAdaptor:
 
             # then pad over frames
             result_dict[field] = fill_or_trim_tensor(
-                tensor=stacked_tensor, dim_size=self.fixed_num_frames, dim=0
+                tensor=stacked_tensor,
+                dim_size=self.fixed_num_frames,
+                dim=0,
             )
 
         return result_dict
 
-    def _pad_over_frames(self, sample_dict: Dict, fields_to_pad: List[str]) -> Dict:
+    def _pad_over_frames(self, sample_dict: dict, fields_to_pad: list[str]) -> dict:
         """
         A helper function to pad data over frames, by repeating the last element over frames.
         """
@@ -532,7 +541,7 @@ class EfmModelAdaptor:
             )
         return result_dict
 
-    def _split_pose_over_snippet(self, sample_dict: Dict) -> Dict:
+    def _split_pose_over_snippet(self, sample_dict: dict) -> dict:
         """
         A helper function to split T_world_rig into T_world_snippet and T_snippet_rig.
         In the meantime, Align gravity to [0, 0, -9.81]
@@ -567,7 +576,8 @@ class EfmModelAdaptor:
                 T_snippet_world = T_world_snippet.inverse()
 
             result_dict[ARIA_OBB_PADDED] = transform_obbs(
-                sample_dict[ARIA_OBB_PADDED], T_snippet_world
+                sample_dict[ARIA_OBB_PADDED],
+                T_snippet_world,
             )
 
         # Also transform semidense points
@@ -578,7 +588,7 @@ class EfmModelAdaptor:
 
         return result_dict
 
-    def _split_timestamps_over_snippet(self, sample_dict: Dict) -> Dict:
+    def _split_timestamps_over_snippet(self, sample_dict: dict) -> dict:
         """
         A helper function to split capture_timestamps_ns into snippet/time_ns and */snippet_time_s
         """
@@ -626,7 +636,8 @@ class EfmModelAdaptor:
             # except gains and exposure_s which is per-frame.
             for cam_label in EfmModelAdaptor.EFM_CAM_LABELS:
                 efm_sample[f"{cam_label}/calib"] = self._convert_to_batched_camera_tw(
-                    efm_sample, cam_label
+                    efm_sample,
+                    cam_label,
                 )
 
             # Convert ATEK GT to EFM GT
@@ -706,13 +717,15 @@ class EfmModelAdaptor:
 
 
 def load_atek_wds_dataset_as_efm(
-    urls: List,
+    urls: list,
     freq=10,
     snippet_length_s=2.0,
     semidense_points_pad_to_num=50000,
-    atek_to_efm_taxonomy_mapping_file: Optional[str] = None,
-    batch_size: Optional[int] = None,
-    collation_fn: Optional[Callable] = None,
+    atek_to_efm_taxonomy_mapping_file: str | None = None,
+    batch_size: int | None = None,
+    collation_fn: Callable | None = None,
+    repeat_flag: bool = False,
+    shuffle_flag: bool = False,
 ):
     efm_model_adaptor = EfmModelAdaptor(
         freq=freq,
@@ -725,21 +738,23 @@ def load_atek_wds_dataset_as_efm(
         urls,
         dict_key_mapping=EfmModelAdaptor.get_dict_key_mapping_all(),
         data_transform_fn=pipelinefilter(efm_model_adaptor.atek_to_efm)(
-            train=collation_fn is not None
+            train=collation_fn is not None,
         ),
         batch_size=batch_size,
         collation_fn=collation_fn,
+        repeat_flag=repeat_flag,
+        shuffle_flag=shuffle_flag,
     )
 
 
 def load_atek_wds_dataset_as_efm_train(
-    urls: List,
+    urls: list,
     freq=10,
     snippet_length_s=2.0,
     semidense_points_pad_to_num=50000,
-    atek_to_efm_taxonomy_mapping_file: Optional[str] = None,
-    batch_size: Optional[int] = None,
-    collation_fn: Optional[Callable] = None,
+    atek_to_efm_taxonomy_mapping_file: str | None = None,
+    batch_size: int | None = None,
+    collation_fn: Callable | None = None,
 ):
     efm_model_adaptor = EfmModelAdaptor(
         freq=freq,
@@ -757,10 +772,10 @@ def load_atek_wds_dataset_as_efm_train(
         partial(
             select_and_remap_dict_keys,
             key_mapping=EfmModelAdaptor.get_dict_key_mapping_all(),
-        )
+        ),
     )
     wds_dataset = wds_dataset.compose(
-        pipelinefilter(efm_model_adaptor.atek_to_efm)(train=collation_fn is not None)
+        pipelinefilter(efm_model_adaptor.atek_to_efm)(train=collation_fn is not None),
     )
     wds_dataset = wds_dataset.batched(batch_size, collation_fn=collation_fn)
 
