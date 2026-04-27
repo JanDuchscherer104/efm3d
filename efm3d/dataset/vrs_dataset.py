@@ -15,14 +15,12 @@
 import math
 import os
 import random
-
 from typing import Callable, List, Optional, Union
 
 import numpy as np
 import pyvrs
 import torch
 import torch.nn.functional as F
-
 from efm3d.aria import CameraTW, ObbTW, PoseTW, smart_stack, transform_obbs
 from efm3d.aria.aria_constants import (
     ARIA_CALIB,
@@ -77,7 +75,10 @@ def is_adt(vrs_path):
     # get folder name
     if vrs_path.endswith(".vrs"):
         vrs_path = os.path.split(vrs_path)[0]
-    return os.path.exists(os.path.join(vrs_path, "aria_trajectory.csv"))
+    if os.path.exists(os.path.join(vrs_path, "aria_trajectory.csv")):
+        return True
+    folder_name = os.path.basename(vrs_path)
+    return "optitrack_release_work_seq" in folder_name
 
 
 def is_aeo(vrs_path):
@@ -274,7 +275,7 @@ def run_sensor_poses(batch, num_notified=-1, max_notified=10):
                     counts = good.sum(dim=-1).squeeze()
                     if num_notified > 0 and num_notified < max_notified:
                         print(
-                            f"some interpolated poses were bad (fraction good per batch: {counts/good.shape[-1]}); likely because tried to interpolated past given input timed poses."
+                            f"some interpolated poses were bad (fraction good per batch: {counts / good.shape[-1]}); likely because tried to interpolated past given input timed poses."
                         )
         return new_batch
 
@@ -288,6 +289,7 @@ class VrsSequenceDataset(Dataset):
         snippet_length_s,
         stride_length_s,
         max_snippets=9999,
+        skip_snippets=0,
         preprocess=None,
     ):
         self.frame_rate = frame_rate
@@ -328,11 +330,10 @@ class VrsSequenceDataset(Dataset):
 
         # Add obbs GT if available
         self.obs = None
-        if not self.is_adt:
-            self.obs = self.load_objects()
+        self.obs = self.load_objects()
         if self.obs is not None:
             obb_freq = int(1.0 / (1e-9 * (self.obb_times[1] - self.obb_times[0])))
-            obb_subsample = int(obb_freq / frame_rate)
+            obb_subsample = max(1, int(obb_freq / frame_rate))
             self.obb_times = self.obb_times[::obb_subsample]
 
         # Add points
@@ -358,6 +359,9 @@ class VrsSequenceDataset(Dataset):
             self.snippet_times.append((snip_start, snip_end))
             snip_start += stride_length_s * 1e9
             snip_end = snip_start + snippet_length_s * 1e9
+
+        if skip_snippets > 0:
+            self.snippet_times = self.snippet_times[skip_snippets:]
 
     def load_objects(self):
         self.obs = load_obbs_gt(
@@ -410,9 +414,9 @@ class VrsSequenceDataset(Dataset):
 
         timedTs_world_object = self.obs["timedTs_world_object"]
         static_Ts_world_object = {}
-        assert (
-            len(timedTs_world_object) != 0
-        ), "Warning: no observations found for entire sequence"
+        assert len(timedTs_world_object) != 0, (
+            "Warning: no observations found for entire sequence"
+        )
         # timedTs_world_object captures static object at the -1 timestamp
         if -1 in timedTs_world_object.keys():
             static_Ts_world_object = timedTs_world_object[-1]
@@ -505,7 +509,7 @@ class VrsSequenceDataset(Dataset):
                 self.time_to_dist_std[time] = dist_std
                 self.time_to_inv_dist_std[time] = inv_dist_std
         print(
-            f"Found {len(self.uid_to_p3)} semidense points; time range {min(self.pts_times_ns)/1e9}s-{max(self.pts_times_ns)/1e9}s"
+            f"Found {len(self.uid_to_p3)} semidense points; time range {min(self.pts_times_ns) / 1e9}s-{max(self.pts_times_ns) / 1e9}s"
         )
 
         # aggregate all the points
@@ -546,6 +550,12 @@ class VrsSequenceDataset(Dataset):
             subsample=subsample,
         )
         if timed_Ts_world_rig is not None:
+            if self.is_adt:
+                T_vio_gravity = get_transform_to_vio_gravity_convention(
+                    GRAVITY_DIRECTION_ADT
+                ).double()
+                for k, T_wr in timed_Ts_world_rig.items():
+                    timed_Ts_world_rig[k] = T_vio_gravity @ T_wr
             return timed_Ts_world_rig
 
         # Other sequences
@@ -781,6 +791,8 @@ class VrsSequenceDataset(Dataset):
                 ARIA_POINTS_VOL_MAX,
                 ARIA_OBB_SEM_ID_TO_NAME,
             ]:
+                if isinstance(sample[key], torch.Tensor) and sample[key].shape[0] == 0:
+                    continue
                 sample[key] = tensor_unify(sample[key], self.frame_rate)
 
         if self.preprocess:

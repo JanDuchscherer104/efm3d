@@ -25,7 +25,6 @@ from efm3d.aria.aria_constants import (
 )
 from efm3d.model.cnn import InvResnetFpn3d, VolumeCNNHead
 from efm3d.model.lifter import VideoBackbone3d
-
 from efm3d.model.video_backbone import VideoBackbone
 from efm3d.utils.detection_utils import simple_nms3d, voxel2obb
 from efm3d.utils.file_utils import parse_global_name_to_id_csv
@@ -170,7 +169,7 @@ class EVL(torch.nn.Module):
         out[ARIA_OBB_PRED_PROBS_FULL_VIZ] = out[ARIA_OBB_PRED_PROBS_FULL]
         return out
 
-    def forward(self, batch):
+    def forward(self, batch, obb_only=False):
         out = {}
         # Run 2D backbone on images to get on 2D feature map per image.
         backbone2d_out_all = self.backbone2d(batch)
@@ -188,10 +187,11 @@ class EVL(torch.nn.Module):
         neck_feats2 = neck_feats1
 
         # ---------- Run the occ head ------------
-        occ_logits = self.occ_head(neck_feats1)
-        occ_pr = torch.sigmoid(occ_logits)  # logits => prob.
-        out["occ_pr"] = occ_pr
-        out["voxel_extent"] = torch.tensor(self.ve).to(occ_pr)
+        if not obb_only:
+            occ_logits = self.occ_head(neck_feats1)
+            occ_pr = torch.sigmoid(occ_logits)  # logits => prob.
+            out["occ_pr"] = occ_pr
+            out["voxel_extent"] = torch.tensor(self.ve).to(neck_feats1)
 
         # ---------- Run the obb head ------------
         # Run the centerness head.

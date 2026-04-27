@@ -27,7 +27,6 @@ import pandas as pd
 import pyvrs
 import torch
 import tqdm
-
 from efm3d.aria import CameraTW, PoseTW
 from efm3d.aria.aria_constants import ARIA_CAM_INFO, ARIA_OBB_BB2, ARIA_OBB_BB3
 from efm3d.utils.rescale import rescale_camera_tw, rescale_image
@@ -297,9 +296,9 @@ def remove_invalid_2d_bbs(timed_bb2s, filter_bb2_area=-1):
 def load_instances(instances_path):
     instance2proto = {}
 
-    assert os.path.exists(
-        instances_path
-    ), f"instances path {instances_path} does not exist"
+    assert os.path.exists(instances_path), (
+        f"instances path {instances_path} does not exist"
+    )
     with open(instances_path, "r") as f:
         lines = f.readlines()
 
@@ -612,13 +611,15 @@ def load_trajectory_aeo(
 
     T_world_rigs = {}
     header = lines[0].strip().split(",")
-    if len(header) not in {26, 28, 29}:
-        print(f"Invalid header, expected 26, 28 or 29 columns, but got {len(header)}")
+    if len(header) not in {20, 26, 28, 29}:
+        print(
+            f"Invalid header, expected 20, 26, 28 or 29 columns, but got {len(header)}"
+        )
         print(header)
         return None
 
     start_index = 0
-    if len(header) == 28:  # no recording_source field in this version
+    if len(header) in {20, 28}:  # no recording_source field in this version
         start_index = -1
 
     N = min(len(lines), load_first_n)
@@ -806,7 +807,9 @@ def sample_times(time_list: List, start_time: int, end_time: int) -> Tuple[int, 
             start_time <= time_list[idx_i]
             and time_list[idx_i] <= time_list[idx_j - 1]
             and time_list[idx_j - 1] < end_time
-        ), f"start {start_time} end {end_time}, time_list[idx_i], {time_list[idx_i]}, time_list[idx_j], {time_list[idx_j]}"
+        ), (
+            f"start {start_time} end {end_time}, time_list[idx_i], {time_list[idx_i]}, time_list[idx_j], {time_list[idx_j]}"
+        )
     else:
         # make sure idx_j is greater than idx_i
         idx_j = max(idx_j, idx_i + 1)

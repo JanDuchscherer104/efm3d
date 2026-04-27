@@ -69,6 +69,8 @@ def fill_obbs_to_snippet(obbs, rgb_ts, T_ws):
     for ts in rgb_ts:
         if ts in obbs:
             obbs_out.append(obbs[ts].add_padding(128))
+        elif len(obbs_ts) == 0:
+            obbs_out.append(ObbTW().add_padding(128))
         else:
             # find the nearest timestamp within 1s
             nidx = find_nearest(obbs_ts, ts)
@@ -142,7 +144,7 @@ def render_views(snippet, h, w, pred_sem_ids_to_names, gt_sem_ids_to_names):
     T_ws = snippet[ARIA_SNIPPET_T_WORLD_SNIPPET]
     Ts_wr = T_ws @ Ts_sr
     rgb_ts = snippet[ARIA_IMG_TIME_NS[0]]
-    time_s = [f"{ts.item()*1e-9:.02f}s" for ts in rgb_ts]
+    time_s = [f"{ts.item() * 1e-9:.02f}s" for ts in rgb_ts]
 
     imgs = {}
     # RGB and SLAM
